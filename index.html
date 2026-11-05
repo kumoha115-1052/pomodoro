@@ -27,7 +27,7 @@ html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);
   font-family:"Zen Kaku Gothic New","Hiragino Sans","Yu Gothic",Meiryo,sans-serif;
-  display:flex;justify-content:center;padding:24px 16px 40px}
+  display:flex;justify-content:center;padding:24px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px));-webkit-text-size-adjust:100%}
 main{width:100%;max-width:420px}
 body[data-mode="break"]{--accent:var(--break)}
 body[data-mode="long"]{--accent:var(--long)}
@@ -60,6 +60,17 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 .num input{width:64px;font:inherit;font-size:17px;text-align:right;padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-variant-numeric:tabular-nums}
 .row.check input{width:22px;height:22px;accent-color:var(--accent)}
 .hint{color:var(--muted);font-size:13px;margin:10px 2px 0;text-align:center}
+button{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.time,.modes,.ctrl{-webkit-user-select:none;user-select:none}
+.ctrl button{min-height:54px}
+.modes button{min-height:46px}
+.num input{width:56px;text-align:center;-moz-appearance:textfield}
+.num input::-webkit-inner-spin-button,.num input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.step{width:42px;height:42px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-size:20px;line-height:1;cursor:pointer;padding:0}
+.row.check{min-height:52px}
+.row.check input{flex:none}
+@media (max-width:380px){body{padding-top:16px}.modes button{font-size:14px}.ctrl{gap:8px}.ctrl button{padding:14px 10px}.row label{font-size:14px}}
+@media (max-height:560px) and (orientation:landscape){.dial{width:min(46vh,240px);margin-top:16px}}
 @media (prefers-reduced-motion:reduce){.prog{transition:none}}
 </style>
 </head>
@@ -97,6 +108,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
     <div class="row"><label for="s-cycles">長い休憩までの集中回数</label><div class="num"><input id="s-cycles" type="number" min="2" max="10" inputmode="numeric">回</div></div>
     <div class="row check"><label for="s-auto">次のタイマーを自動で開始</label><input id="s-auto" type="checkbox"></div>
     <div class="row check"><label for="s-sound">終了時に音を鳴らす</label><input id="s-sound" type="checkbox"></div>
+    <div class="row check"><label for="s-wake">実行中は画面を消さない</label><input id="s-wake" type="checkbox"></div>
     <div class="row check"><label for="s-notify">終了時にデスクトップ通知を出す</label><input id="s-notify" type="checkbox"></div>
     <p class="hint" id="notify-msg" role="status" style="padding-bottom:10px"></p>
   </section>
@@ -105,7 +117,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
 
 <script>
 (function(){
-  var DEFAULTS={focus:25,break:5,long:15,cycles:4,auto:false,sound:true,notify:false};
+  var DEFAULTS={focus:25,break:5,long:15,cycles:4,auto:false,sound:true,notify:false,wake:true};
   var cfg=Object.assign({},DEFAULTS);
   try{var saved=JSON.parse(localStorage.getItem("focus-timer-cfg")||"null");if(saved)Object.assign(cfg,saved);}catch(e){}
   function save(){try{localStorage.setItem("focus-timer-cfg",JSON.stringify(cfg));}catch(e){}}
@@ -145,6 +157,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
   function start(){
     if(running)return;
     if(remain<=0)remain=total;
+    if(cfg.sound)getCtx();
+    wakeOn();
     running=true;
     endAt=Date.now()+remain;
     timerId=setInterval(tick,250);
@@ -152,6 +166,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
   }
   function stop(){
     running=false;
+    wakeOff();
     if(timerId){clearInterval(timerId);timerId=null;}
   }
   function pause(){
@@ -176,16 +191,35 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
     remain=0;
     if(mode==="focus")done++;
     beep();
+    try{if(navigator.vibrate)navigator.vibrate([200,100,200]);}catch(e){}
     var n=next();
     var wasFocus=(mode=="focus");
     notify(wasFocus?"集中が終わりました":"休憩が終わりました",wasFocus?(n==="long"?"長めの休憩にしましょう。":"少し休憩しましょう。"):"次の集中を始めましょう。");
     setMode(n,cfg.auto);
   }
+  var actx=null,wl=null;
+  function getCtx(){
+    try{
+      if(!actx){var A=window.AudioContext||window.webkitAudioContext;if(A)actx=new A();}
+      if(actx&&actx.state==="suspended")actx.resume();
+    }catch(e){}
+    return actx;
+  }
+  function wakeOn(){
+    try{
+      if(cfg.wake&&navigator.wakeLock&&!wl){
+        navigator.wakeLock.request("screen").then(function(s){
+          wl=s;s.addEventListener("release",function(){wl=null;});
+        }).catch(function(){});
+      }
+    }catch(e){}
+  }
+  function wakeOff(){try{if(wl){wl.release();wl=null;}}catch(e){}}
   function beep(){
     if(!cfg.sound)return;
     try{
-      var A=window.AudioContext||window.webkitAudioContext;
-      var ctx=new A();
+      var ctx=getCtx();
+      if(!ctx)return;
       [0,0.28,0.56].forEach(function(t){
         var o=ctx.createOscillator(),g=ctx.createGain();
         o.type="sine";o.frequency.value=880;
@@ -221,13 +255,25 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
   document.addEventListener("keydown",function(e){
     if(e.code==="Space"&&!/INPUT|BUTTON/.test(e.target.tagName)){e.preventDefault();running?pause():start();}
   });
-  document.addEventListener("visibilitychange",function(){if(running)tick();});
+  document.addEventListener("visibilitychange",function(){if(running){tick();wakeOn();}});
 
   // Settings
   var fields={focus:"s-focus",break:"s-break",long:"s-long",cycles:"s-cycles"};
   var limits={focus:[1,180],break:[1,60],long:[1,90],cycles:[2,10]};
   Object.keys(fields).forEach(function(k){
     var el=$(fields[k]);
+    function mk(txt,d,label){
+      var b=document.createElement("button");
+      b.type="button";b.className="step";b.textContent=txt;b.setAttribute("aria-label",label);
+      b.addEventListener("click",function(){
+        var v=parseInt(el.value,10);if(isNaN(v))v=cfg[k];
+        el.value=Math.min(limits[k][1],Math.max(limits[k][0],v+d));
+        el.dispatchEvent(new Event("input"));
+      });
+      return b;
+    }
+    el.parentNode.insertBefore(mk("−",-1,"減らす"),el);
+    el.parentNode.insertBefore(mk("+",1,"増やす"),el.nextSibling);
     el.value=cfg[k];
     el.addEventListener("input",function(){
       var v=parseInt(el.value,10);
@@ -245,6 +291,11 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
   $("s-sound").checked=cfg.sound;
   $("s-auto").addEventListener("change",function(e){cfg.auto=e.target.checked;save();});
   $("s-sound").addEventListener("change",function(e){cfg.sound=e.target.checked;save();});
+  $("s-wake").checked=cfg.wake;
+  $("s-wake").addEventListener("change",function(e){
+    cfg.wake=e.target.checked;save();
+    if(cfg.wake){if(running)wakeOn();}else wakeOff();
+  });
   $("s-notify").checked=cfg.notify&&canNotify()&&Notification.permission==="granted";
   if(!$("s-notify").checked)cfg.notify=false;
   $("s-notify").addEventListener("change",function(e){
@@ -252,7 +303,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline
     msg.textContent="";
     function fail(t){box.checked=false;cfg.notify=false;save();msg.textContent=t;}
     if(!box.checked){cfg.notify=false;save();return;}
-    if(!canNotify()){fail("この環境では通知を利用できません。");return;}
+    if(!canNotify()){fail("この環境では通知を利用できません。音とバイブ（対応端末のみ）でお知らせします。");return;}
     if(Notification.permission==="denied"){fail("通知がブロックされています。ブラウザのサイト設定で許可してください。");return;}
     Promise.resolve(Notification.requestPermission()).then(function(r){
       if(r==="granted"){
